@@ -29,7 +29,7 @@ bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-greeting_text: str = "👋 Привет! Напиши своё сообщение, и мы ответим тебе как можно скорее."
+greeting_text: str = "Ух ты, новенький! Обычно люди убегают после первого поста. Ты либо очень смелый, либо очень наивный. В любом случае — добро пожаловать в мой театр абсурда. Я здесь главный актёр. Ты — зритель. Аплодируй, когда я скажу."
 forward_map: dict[int, int] = {}
 admin_chat_id: int | None = ADMIN_ID if ADMIN_ID != 0 else None
 active_chat_users: set[int] = set()
@@ -137,7 +137,12 @@ async def cmd_start_user(message: Message) -> None:
 
 async def enter_chat(message: Message) -> None:
     active_chat_users.add(message.chat.id)
-    await message.answer("Режим диалога с поддержкой активирован. Напишите ваше сообщение.", reply_markup=chat_keyboard())
+    await message.answer(
+        "О, приватный чат. Ты либо очень смелый, либо очень отчаянный. "
+        "В любом случае — я впечатлён твоей наглостью. Спрашивай. "
+        "Но не жалуйся потом, что не предупредил.",
+        reply_markup=chat_keyboard()
+    )
     if admin_chat_id:
         user = message.from_user
         uname = f"@{user.username}" if user.username else "(без username)"
@@ -468,7 +473,6 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write("Бот работает!".encode("utf-8"))
 
     def log_message(self, format, *args):
-        # Отключаем лишний спам логов сервера в консоль
         return
 
 def run_health_check_server():
@@ -500,7 +504,7 @@ async def setup_commands() -> None:
 async def main() -> None:
     logger.info("Starting feedback bot...")
     
-    # Запускаем наш микро-сервер в отдельном потоке, чтобы он не мешал боту
+    # Запуск сервера-заглушки для прохождения проверок Render
     threading.Thread(target=run_health_check_server, daemon=True).start()
     
     await setup_commands()
