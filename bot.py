@@ -9,7 +9,7 @@ from aiogram.types import (
     BotCommand, BotCommandScopeDefault, BotCommandScopeChat,
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
 )
-from aiogram.filters import CommandStart, Command, BaseFilter
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -53,17 +53,15 @@ total_messages: int = 0
 class AdminStates(StatesGroup):
     waiting_for_greeting = State()
 
-class IsAdmin(BaseFilter):
-    async def call(self, message: Message) -> bool:
-        if ADMIN_ID and message.from_user and message.from_user.id == ADMIN_ID:
-            return True
-        return bool(message.from_user and message.from_user.username == ADMIN_USERNAME)
+# Функция-фильтр для проверки на админа
+async def is_admin_filter(message: Message) -> bool:
+    if ADMIN_ID and message.from_user and message.from_user.id == ADMIN_ID:
+        return True
+    return bool(message.from_user and message.from_user.username == ADMIN_USERNAME)
 
-class IsUser(BaseFilter):
-    async def call(self, message: Message) -> bool:
-        if ADMIN_ID and message.from_user and message.from_user.id == ADMIN_ID:
-            return False
-        return not (message.from_user and message.from_user.username == ADMIN_USERNAME)
+# Функция-фильтр для проверки на обычного пользователя
+async def is_user_filter(message: Message) -> bool:
+    return not await is_admin_filter(message)
 
 # ──────────────────────────────────────────────
 # Клавиатуры
@@ -116,7 +114,7 @@ def users_page_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
 # Хэндлеры команд
 # ──────────────────────────────────────────────
 
-@dp.message(CommandStart(), IsAdmin())
+@dp.message(CommandStart(), is_admin_filter)
 async def cmd_start_admin(message: Message) -> None:
     global admin_chat_id
     admin_chat_id = message.chat.id
@@ -130,7 +128,7 @@ async def cmd_start_admin(message: Message) -> None:
         parse_mode="HTML",
     )
 
-@dp.message(CommandStart(), IsUser())
+@dp.message(CommandStart(), is_user_filter)
 async def cmd_start_user(message: Message) -> None:
     await message.answer(greeting_text, reply_markup=user_keyboard())
 
@@ -158,22 +156,22 @@ async def leave_chat(message: Message) -> None:
             parse_mode="HTML",
         )
 
-@dp.message(Command("chat"), IsUser())
+@dp.message(Command("chat"), is_user_filter)
 async def cmd_chat(message: Message) -> None:
     if message.chat.id in active_chat_users:
         await leave_chat(message)
     else:
         await enter_chat(message)
 
-@dp.message(IsUser(), F.text == BTN_CHAT)
+@dp.message(is_user_filter, F.text == BTN_CHAT)
 async def btn_enter_chat(message: Message) -> None:
     await enter_chat(message)
 
-@dp.message(IsUser(), F.text == BTN_STOP)
+@dp.message(is_user_filter, F.text == BTN_STOP)
 async def btn_leave_chat(message: Message) -> None:
     await leave_chat(message)
 
-@dp.message(Command("panel"), IsAdmin())
+@dp.message(Command("panel"), is_admin_filter)
 async def cmd_panel(message: Message) -> None:
     global admin_chat_id
     admin_chat_id = message.chat.id
@@ -296,7 +294,7 @@ async def receive_new_greeting(message: Message, state: FSMContext) -> None:
 # Ответ админа пользователю
 # ──────────────────────────────────────────────
 
-@dp.message(IsAdmin(), F.reply_to_message)
+@dp.message(is_admin_filter, F.reply_to_message)
 async def handle_admin_reply(message: Message) -> None:
     replied_id = message.reply_to_message.message_id
     user_chat_id = forward_map.get(replied_id)
@@ -393,11 +391,11 @@ async def forward_to_admin(message: Message) -> None:
 # Пользовательские функции и игра
 # ──────────────────────────────────────────────
 
-@dp.message(IsUser(), F.text == BTN_START)
+@dp.message(is_user_filter, F.text == BTN_START)
 async def btn_start(message: Message) -> None:
     await message.answer(greeting_text, reply_markup=user_keyboard())
 
-@dp.message(IsUser(), F.text == BTN_LUCK)
+@dp.message(is_user_filter, F.text == BTN_LUCK)
 async def btn_luck(message: Message) -> None:
     await cmd_luck(message)
 
@@ -438,7 +436,7 @@ async def cmd_luck(message: Message) -> None:
         logger.error(f"/luck error: {e}")
         await message.answer(f"Ошибка: {e}")
 
-@dp.message(IsUser(), F.text.startswith("/"))
+@dp.message(is_user_filter, F.text.startswith("/"))
 async def handle_unknown_command(message: Message) -> None:
     await message.answer(
         "Ты серьёзно ошибся в команде? Я ожидал большего. Ну ладно. "
@@ -448,7 +446,7 @@ async def handle_unknown_command(message: Message) -> None:
         "/luck — кинуть кость"
     )
 
-@dp.message(IsUser())
+@dp.message(is_user_filter)
 async def handle_user_message(message: Message) -> None:
     if message.chat.id not in active_chat_users:
         return
