@@ -15,7 +15,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 
 # Переменные окружения
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -115,6 +115,7 @@ def users_page_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
 # ──────────────────────────────────────────────
 # Хэндлеры команд
 # ──────────────────────────────────────────────
+
 @dp.message(CommandStart(), IsAdmin())
 async def cmd_start_admin(message: Message) -> None:
     global admin_chat_id
@@ -215,7 +216,8 @@ async def cb_stats(callback: CallbackQuery) -> None:
             [InlineKeyboardButton(text="↩️ Панель", callback_data="back_panel")]
         ]),
     )
-    @dp.callback_query(F.data.startswith("users_p:"))
+
+@dp.callback_query(F.data.startswith("users_p:"))
 async def cb_users_page(callback: CallbackQuery) -> None:
     await callback.answer()
     page = int(callback.data.split(":")[1])
@@ -309,7 +311,7 @@ async def handle_admin_reply(message: Message) -> None:
             await bot.send_message(chat_id=user_chat_id, text=message.text, reply_markup=kb)
         elif message.photo:
             await bot.send_photo(chat_id=user_chat_id, photo=message.photo[-1].file_id, caption=message.caption, reply_markup=kb)
-            elif message.document:
+        elif message.document:
             await bot.send_document(chat_id=user_chat_id, document=message.document.file_id, caption=message.caption, reply_markup=kb)
         elif message.voice:
             await bot.send_voice(chat_id=user_chat_id, voice=message.voice.file_id, caption=message.caption, reply_markup=kb)
@@ -478,5 +480,5 @@ async def main() -> None:
     await setup_commands()
     await dp.start_polling(bot)
 
-if name == "main":
+if __name__ == "__main__":
     asyncio.run(main())
