@@ -20,7 +20,6 @@ logger = logging.getLogger(name)
 # Переменные окружения
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "mr_zefirka").lstrip("@")
-# Добавили ADMIN_ID, чтобы бот знал ваш чат сразу и не выдавал ошибок, если пользователь пишет первым
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
 
 bot = Bot(token=BOT_TOKEN)
@@ -112,10 +111,10 @@ def users_page_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
         nav,
         [InlineKeyboardButton(text="↩️ Панель", callback_data="back_panel")],
     ])
+
 # ──────────────────────────────────────────────
 # Хэндлеры команд
 # ──────────────────────────────────────────────
-
 @dp.message(CommandStart(), IsAdmin())
 async def cmd_start_admin(message: Message) -> None:
     global admin_chat_id
@@ -216,7 +215,7 @@ async def cb_stats(callback: CallbackQuery) -> None:
             [InlineKeyboardButton(text="↩️ Панель", callback_data="back_panel")]
         ]),
     )
-@dp.callback_query(F.data.startswith("users_p:"))
+    @dp.callback_query(F.data.startswith("users_p:"))
 async def cb_users_page(callback: CallbackQuery) -> None:
     await callback.answer()
     page = int(callback.data.split(":")[1])
@@ -310,7 +309,7 @@ async def handle_admin_reply(message: Message) -> None:
             await bot.send_message(chat_id=user_chat_id, text=message.text, reply_markup=kb)
         elif message.photo:
             await bot.send_photo(chat_id=user_chat_id, photo=message.photo[-1].file_id, caption=message.caption, reply_markup=kb)
-elif message.document:
+            elif message.document:
             await bot.send_document(chat_id=user_chat_id, document=message.document.file_id, caption=message.caption, reply_markup=kb)
         elif message.voice:
             await bot.send_voice(chat_id=user_chat_id, voice=message.voice.file_id, caption=message.caption, reply_markup=kb)
@@ -405,7 +404,7 @@ async def cmd_luck(message: Message) -> None:
     try:
         await message.answer(
             "Ты действительно хочешь рискнуть? Против меня? Это не риск. Это самоубийство. "
-"Но я люблю зрителей. Особенно тех, кто проигрывает красиво. "
+            "Но я люблю зрителей. Особенно тех, кто проигрывает красиво. "
             "Давай. Покажи мне, как ты падаешь."
         )
         user_dice = await bot.send_dice(chat_id=message.chat.id, emoji="🎲")
