@@ -1,0 +1,557 @@
+import asyncio
+import logging
+import os
+from dataclasses import dataclass, field
+from datetime import datetime
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    BotCommand, BotCommandScopeDefault, BotCommandScopeChat,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+)
+from aiogram.filters import CommandStart, Command, BaseFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "mr_zefirka").lstrip("@")
+
+bot = Bot(token=BOT_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+
+# Greeting shown to users on /start
+greeting_text: str = "👋 Привет! Напиши своё сообщение, и мы ответим тебе как можно скорее."
+
+# forward_map: admin's forwarded message_id -> original user's chat_id
+forward_map: dict[int, int] = {}
+
+# admin numeric chat_id (set on /start or /panel)
+admin_chat_id: int | None = None
+
+# users currently in chat mode (chat_id -> True)
+active_chat_users: set[int] = set()
+
+USERS_PER_PAGE = 10
+
+BTN_CHAT    = "🤫Приватный диалог"
+BTN_STOP    = "🛑 Завершить диалог"
+BTN_LUCK    = "🎲 Кинуть кость"
+BTN_START   = "👋 Старт"
+
+
+@dataclass
+class UserInfo:
+    chat_id: int
+    full_name: str
+    username: str | None
+    msg_count: int = 0
+    first_seen: datetime = field(default_factory=datetime.now)
+    last_seen: datetime = field(default_factory=datetime.now)
+
+
+# user registry: chat_id -> UserInfo
+users: dict[int, UserInfo] = {}
+total_messages: int = 0
+
+
+class AdminStates(StatesGroup):
+    waiting_for_greeting = State()
+
+
+class IsAdmin(BaseFilter):
+    async def __call__(self, message: Message) -> bool:
+        return bool(message.from_user and message.from_user.username == ADMIN_USERNAME)
+
+
+class IsUser(BaseFilter):
+    async def __call__(self, message: Message) -> bool:
+        return not (message.from_user and message.from_user.username == ADMIN_USERNAME)
+
+
+# ──────────────────────────────────────────────
+# Keyboards
+# ──────────────────────────────────────────────
+
+def user_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_CHAT)],
+            [KeyboardButton(text=BTN_LUCK), KeyboardButton(text=BTN_START)],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Выбери действие...",
+    )
+
+
+def chat_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_STOP)],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Напиши сообщение поддержке...",
+    )
+
+
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📊 Статистика", callback_data="stats"),
+            InlineKeyboardButton(text="👥 Пользователи", callback_data="users_p:0"),
+        ],
+        [
+            InlineKeyboardButton(text="✏️ Изменить приветствие", callback_data="edit_greeting"),
+            InlineKeyboardButton(text="👁 Показать приветствие", callback_data="show_greeting"),
+        ],
+    ])
+
+
+def users_page_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"users_p:{page - 1}"))
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"users_p:{page + 1}"))
+    return InlineKeyboardMarkup(inline_keyboard=[
+        nav,
+        [InlineKeyboardButton(text="↩️ Панель", callback_data="back_panel")],
+    ])
+
+
+# ──────────────────────────────────────────────
+# /start
+# ──────────────────────────────────────────────
+
+@dp.message(CommandStart(), IsAdmin())
+async def cmd_start_admin(message: Message) -> None:
+    global admin_chat_id
+    admin_chat_id = message.chat.id
+    await setup_commands()
+    await message.answer(
+        f"👋 Админ-панель активна.\n"
+        f"Твой chat ID: <code>{message.chat.id}</code>\n\n"
+        "Сообщения пользователей приходят только когда они активируют режим /chat. "
+        "Отвечай реплаем на пересланное сообщение — ответ уйдёт нужному пользователю.\n\n"
+        "Используй /panel для управления ботом.",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(CommandStart(), IsUser())
+async def cmd_start_user(message: Message) -> None:
+    await message.answer(greeting_text, reply_markup=user_keyboard())
+
+
+# ──────────────────────────────────────────────
+# /chat — toggle chat mode for users
+# ──────────────────────────────────────────────
+
+async def enter_chat(message: Message) -> None:
+    active_chat_users.add(message.chat.id)
+    await message.answer("·", reply_markup=chat_keyboard())
+    if admin_chat_id:
+        user = message.from_user
+        uname = f"@{user.username}" if user.username else "(без username)"
+        await bot.send_message(
+            admin_chat_id,
+            f"🟢 <b>{user.full_name}</b> {uname} начал диалог — отвечай реплаем.",
+            parse_mode="HTML",
+        )
+
+
+async def leave_chat(message: Message) -> None:
+    active_chat_users.discard(message.chat.id)
+    await message.answer("·", reply_markup=user_keyboard())
+    if admin_chat_id:
+        user = message.from_user
+        uname = f"@{user.username}" if user.username else "(без username)"
+        await bot.send_message(
+            admin_chat_id,
+            f"🔴 <b>{user.full_name}</b> {uname} завершил диалог.",
+            parse_mode="HTML",
+        )
+
+
+@dp.message(Command("chat"), IsUser())
+async def cmd_chat(message: Message) -> None:
+    if message.chat.id in active_chat_users:
+        await leave_chat(message)
+    else:
+        await enter_chat(message)
+
+
+@dp.message(IsUser(), F.text == BTN_CHAT)
+async def btn_enter_chat(message: Message) -> None:
+    await enter_chat(message)
+
+
+@dp.message(IsUser(), F.text == BTN_STOP)
+async def btn_leave_chat(message: Message) -> None:
+    await leave_chat(message)
+
+
+# ──────────────────────────────────────────────
+# /panel (admin only)
+# ──────────────────────────────────────────────
+
+@dp.message(Command("panel"), IsAdmin())
+async def cmd_panel(message: Message) -> None:
+    global admin_chat_id
+    admin_chat_id = message.chat.id
+    await message.answer(
+        "⚙️ <b>Панель управления</b>",
+        parse_mode="HTML",
+        reply_markup=admin_panel_keyboard(),
+    )
+
+
+# ──────────────────────────────────────────────
+# Callback: statistics
+# ──────────────────────────────────────────────
+
+@dp.callback_query(F.data == "stats")
+async def cb_stats(callback: CallbackQuery) -> None:
+    await callback.answer()
+    total_users = len(users)
+    if total_users == 0:
+        text = "📊 <b>Статистика</b>\n\nПока нет ни одного пользователя."
+    else:
+        top = sorted(users.values(), key=lambda u: u.msg_count, reverse=True)[:5]
+        top_lines = "\n".join(
+            f"  {i+1}. {u.full_name} — {u.msg_count} сообщ."
+            for i, u in enumerate(top)
+        )
+        last_active = max(users.values(), key=lambda u: u.last_seen)
+        text = (
+            f"📊 <b>Статистика</b>\n\n"
+            f"👥 Пользователей: <b>{total_users}</b>\n"
+            f"💬 Сообщений всего: <b>{total_messages}</b>\n"
+            f"🟢 В чате сейчас: <b>{len(active_chat_users)}</b>\n"
+            f"🕐 Последний активный: <b>{last_active.full_name}</b> "
+            f"({last_active.last_seen.strftime('%d.%m %H:%M')})\n\n"
+            f"🏆 <b>Топ по сообщениям:</b>\n{top_lines}"
+        )
+    await callback.message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="↩️ Панель", callback_data="back_panel")]
+        ]),
+    )
+
+
+# ──────────────────────────────────────────────
+# Callback: user list (paginated)
+# ──────────────────────────────────────────────
+
+@dp.callback_query(F.data.startswith("users_p:"))
+async def cb_users_page(callback: CallbackQuery) -> None:
+    await callback.answer()
+    page = int(callback.data.split(":")[1])
+    sorted_users = sorted(users.values(), key=lambda u: u.last_seen, reverse=True)
+    total_pages = max(1, (len(sorted_users) + USERS_PER_PAGE - 1) // USERS_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+    chunk = sorted_users[page * USERS_PER_PAGE:(page + 1) * USERS_PER_PAGE]
+
+    if not chunk:
+        text = "👥 <b>Пользователи</b>\n\nПока нет ни одного пользователя."
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="↩️ Панель", callback_data="back_panel")]
+        ])
+    else:
+        lines = []
+        for u in chunk:
+            uname = f"@{u.username}" if u.username else "(без username)"
+            status = "🟢" if u.chat_id in active_chat_users else "⚫️"
+            lines.append(
+                f"{status} <b>{u.full_name}</b> {uname}\n"
+                f"  💬 {u.msg_count} сообщ. | 🕐 {u.last_seen.strftime('%d.%m %H:%M')}"
+            )
+        text = f"👥 <b>Пользователи</b>\n\n" + "\n\n".join(lines)
+        markup = users_page_keyboard(page, total_pages)
+
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=markup)
+
+
+@dp.callback_query(F.data == "back_panel")
+async def cb_back_panel(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        "⚙️ <b>Панель управления</b>",
+        parse_mode="HTML",
+        reply_markup=admin_panel_keyboard(),
+    )
+
+
+@dp.callback_query(F.data == "noop")
+async def cb_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+# ──────────────────────────────────────────────
+# Callback: greeting
+# ──────────────────────────────────────────────
+
+@dp.callback_query(F.data == "show_greeting")
+async def cb_show_greeting(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        f"📝 <b>Текущее приветствие:</b>\n\n{greeting_text}",
+        parse_mode="HTML",
+    )
+
+
+@dp.callback_query(F.data == "edit_greeting")
+async def cb_edit_greeting(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        "✏️ Отправь новый текст приветствия.\n"
+        "Пользователи увидят его при команде /start.\n\n"
+        "/cancel — отмена",
+    )
+    await state.set_state(AdminStates.waiting_for_greeting)
+
+
+@dp.message(Command("cancel"), AdminStates.waiting_for_greeting)
+async def cmd_cancel(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("❌ Отменено.", reply_markup=admin_panel_keyboard())
+
+
+@dp.message(AdminStates.waiting_for_greeting)
+async def receive_new_greeting(message: Message, state: FSMContext) -> None:
+    global greeting_text
+    greeting_text = message.text or greeting_text
+    await state.clear()
+    await message.answer(
+        f"✅ Приветствие обновлено!\n\n<b>Новое приветствие:</b>\n{greeting_text}",
+        parse_mode="HTML",
+        reply_markup=admin_panel_keyboard(),
+    )
+
+
+# ──────────────────────────────────────────────
+# Admin reply to user (admin only)
+# ──────────────────────────────────────────────
+
+@dp.message(IsAdmin(), F.reply_to_message)
+async def handle_admin_reply(message: Message) -> None:
+    replied_id = message.reply_to_message.message_id
+    user_chat_id = forward_map.get(replied_id)
+
+    if user_chat_id is None:
+        await message.answer("⚠️ Не удалось найти пользователя для этого сообщения.")
+        return
+
+    try:
+        kb = chat_keyboard() if user_chat_id in active_chat_users else ReplyKeyboardRemove()
+        await bot.send_message(
+            chat_id=user_chat_id,
+            text=message.text or message.caption or "(медиа)",
+            reply_markup=kb,
+        )
+        await message.answer("✅ Ответ отправлен.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка отправки: {e}")
+
+
+# ──────────────────────────────────────────────
+# Forward user messages to admin (chat mode only)
+# ──────────────────────────────────────────────
+
+def track_user(message: Message) -> None:
+    global total_messages
+    user = message.from_user
+    now = datetime.now()
+    if user.id not in users:
+        users[user.id] = UserInfo(
+            chat_id=message.chat.id,
+            full_name=user.full_name,
+            username=user.username,
+            first_seen=now,
+            last_seen=now,
+        )
+    users[user.id].msg_count += 1
+    users[user.id].last_seen = now
+    users[user.id].full_name = user.full_name
+    users[user.id].username = user.username
+    total_messages += 1
+
+
+async def forward_to_admin(message: Message) -> None:
+    if admin_chat_id is None:
+        logger.warning("Admin chat ID not known yet — admin must /start the bot first.")
+        return
+
+    user = message.from_user
+    username_part = f"@{user.username}" if user.username else "(без username)"
+
+    reply_context = ""
+    if message.reply_to_message:
+        quoted = (
+            message.reply_to_message.text
+            or message.reply_to_message.caption
+            or "(медиа)"
+        )
+        reply_context = f"↩️ <i>В ответ на:</i> «{quoted[:100]}»\n\n"
+
+    header = (
+        f"📨 <b>{user.full_name}</b> {username_part}\n"
+        f"ID: <code>{user.id}</code>\n\n"
+        f"{reply_context}"
+    )
+
+    try:
+        if message.text:
+            sent = await bot.send_message(
+                chat_id=admin_chat_id,
+                text=header + message.text,
+                parse_mode="HTML",
+            )
+        elif message.photo:
+            sent = await bot.send_photo(
+                chat_id=admin_chat_id,
+                photo=message.photo[-1].file_id,
+                caption=header + (message.caption or ""),
+                parse_mode="HTML",
+            )
+        elif message.document:
+            sent = await bot.send_document(
+                chat_id=admin_chat_id,
+                document=message.document.file_id,
+                caption=header + (message.caption or ""),
+                parse_mode="HTML",
+            )
+        elif message.voice:
+            sent = await bot.send_voice(
+                chat_id=admin_chat_id,
+                voice=message.voice.file_id,
+                caption=header + (message.caption or ""),
+                parse_mode="HTML",
+            )
+        elif message.sticker:
+            await bot.send_message(
+                chat_id=admin_chat_id,
+                text=header + f"[Стикер: {message.sticker.emoji or ''}]",
+                parse_mode="HTML",
+            )
+            sent = await bot.send_sticker(
+                chat_id=admin_chat_id,
+                sticker=message.sticker.file_id,
+            )
+        else:
+            sent = await bot.send_message(
+                chat_id=admin_chat_id,
+                text=header + "[Неподдерживаемый тип сообщения]",
+                parse_mode="HTML",
+            )
+
+        forward_map[sent.message_id] = message.chat.id
+
+    except Exception as e:
+        logger.error(f"Failed to forward message to admin: {e}")
+
+
+# ──────────────────────────────────────────────
+# Button & command handlers for users
+# ──────────────────────────────────────────────
+
+@dp.message(IsUser(), F.text == BTN_START)
+async def btn_start(message: Message) -> None:
+    await message.answer(greeting_text, reply_markup=user_keyboard())
+
+
+@dp.message(IsUser(), F.text == BTN_LUCK)
+async def btn_luck(message: Message) -> None:
+    await cmd_luck(message)
+
+
+@dp.message(Command("luck"))
+async def cmd_luck(message: Message) -> None:
+    try:
+        await message.answer(
+            "Ты действительно хочешь рискнуть? Против меня? Это не риск. Это самоубийство. "
+            "Но я люблю зрителей. Особенно тех, кто проигрывает красиво. "
+            "Давай. Покажи мне, как ты падаешь."
+        )
+        user_dice = await bot.send_dice(chat_id=message.chat.id, emoji="🎲")
+        bot_dice = await bot.send_dice(chat_id=message.chat.id, emoji="🎲")
+        await asyncio.sleep(4)
+        u = user_dice.dice.value
+        b = bot_dice.dice.value
+        if u > b:
+            result = (
+                "Что? Ты выиграл? Случайность. Чистая случайность. Не привыкай. "
+                "Это не повторится. Даже если будешь играть до конца жизни. "
+                "И знаешь что? Я дам тебе реванш. Из чистого любопытства. "
+                "Посмотрим, повезёт ли тебе дважды."
+            )
+        elif u < b:
+            result = (
+                "Проигрыш: И что я говорил? Ты проиграл. Как и ожидалось. "
+                "Не расстраивайся. Ты не первый. Ты не последний. "
+                "Ты просто очередной, кто попытался бросить вызов Малфою и пожалел об этом."
+            )
+        else:
+            result = (
+                "Ничья? Неожиданно. У тебя есть удача. Или я просто отвлёкся. "
+                "Давай переиграем. Мне не нравится оставлять дела незаконченными. "
+                "Тем более — когда они такие близкие к моей победе."
+            )
+        await message.answer(f"Ты: {u} — Я: {b}\n{result}")
+    except Exception as e:
+        logger.error(f"/luck error: {e}")
+        await message.answer(f"Ошибка: {e}")
+
+
+@dp.message(IsUser(), F.text.startswith("/"))
+async def handle_unknown_command(message: Message) -> None:
+    await message.answer(
+        "Ты серьёзно ошибся в команде? Я ожидал большего. Ну ладно. "
+        "Вот тебе список того, что я умею. Не благодари.\n\n"
+        "/start — начать диалог\n"
+        "/chat — написать в поддержку\n"
+        "/luck — кинуть кость"
+    )
+
+
+@dp.message(IsUser())
+async def handle_user_message(message: Message) -> None:
+    if message.chat.id not in active_chat_users:
+        return
+    track_user(message)
+    await forward_to_admin(message)
+
+
+# ──────────────────────────────────────────────
+# Bot command menu
+# ──────────────────────────────────────────────
+
+async def setup_commands() -> None:
+    user_commands = [
+        BotCommand(command="start",  description="👋 Начать диалог"),
+        BotCommand(command="chat",   description="💬 Написать в поддержку"),
+        BotCommand(command="luck",   description="🎲 Кинуть кость"),
+    ]
+    admin_commands = user_commands + [
+        BotCommand(command="panel", description="⚙️ Панель управления"),
+    ]
+    await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+    if admin_chat_id:
+        await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_chat_id))
+
+
+async def main() -> None:
+    logger.info("Starting feedback bot...")
+    await setup_commands()
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
