@@ -450,7 +450,7 @@ async def handle_unknown_command(message: Message) -> None:
         "Ты серьёзно ошибся в команде? Я ожидал большего. Ну ладно. "
         "Вот тебе список того, что я умею. Не благодари.\n\n"
         "/start — начать диалог\n"
-        "/chat — написать в поддержку\n"
+        f"/chat — {BTN_CHAT}\n"
         "/luck — кинуть кость"
     )
 
@@ -488,7 +488,7 @@ def run_health_check_server():
 async def setup_commands() -> None:
     user_commands = [
         BotCommand(command="start",  description="👋 Начать диалог"),
-        BotCommand(command="chat",   description="💬 Написать в поддержку"),
+        BotCommand(command="chat",   description=f"{BTN_CHAT}"),
         BotCommand(command="luck",   description="🎲 Кинуть кость"),
     ]
     admin_commands = user_commands + [
@@ -504,7 +504,6 @@ async def setup_commands() -> None:
 async def main() -> None:
     logger.info("Starting feedback bot...")
     
-    # Запуск сервера-заглушки для прохождения проверок Render
     threading.Thread(target=run_health_check_server, daemon=True).start()
     
     await setup_commands()
