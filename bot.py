@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
@@ -21,6 +23,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "mr_zefirka").lstrip("@")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
+PORT = int(os.environ.get("PORT", 10000))
 
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
@@ -404,7 +407,7 @@ async def cmd_luck(message: Message) -> None:
     try:
         await message.answer(
             "Ты действительно хочешь рискнуть? Против меня? Это не риск. Это самоубийство. "
-            "Но я люблю зрителей. Особенно тех, кто проигрывает красиво. "
+            "Но я люблю зрителей. Especially тех, кто проигрывает красиво. "
             "Давай. Покажи мне, как ты падаешь."
         )
         user_dice = await bot.send_dice(chat_id=message.chat.id, emoji="🎲")
@@ -454,6 +457,27 @@ async def handle_user_message(message: Message) -> None:
     await forward_to_admin(message)
 
 # ──────────────────────────────────────────────
+# Заглушка веб-сервера для Render
+# ──────────────────────────────────────────────
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write("Бот работает!".encode("utf-8"))
+
+    def log_message(self, format, *args):
+        # Отключаем лишний спам логов сервера в консоль
+        return
+
+def run_health_check_server():
+    server_address = ("", PORT)
+    httpd = HTTPServer(server_address, HealthCheckHandler)
+    logger.info(f"Встроенный веб-сервер запущен на порту {PORT}")
+    httpd.serve_forever()
+
+# ──────────────────────────────────────────────
 # Запуск
 # ──────────────────────────────────────────────
 
@@ -475,6 +499,10 @@ async def setup_commands() -> None:
 
 async def main() -> None:
     logger.info("Starting feedback bot...")
+    
+    # Запускаем наш микро-сервер в отдельном потоке, чтобы он не мешал боту
+    threading.Thread(target=run_health_check_server, daemon=True).start()
+    
     await setup_commands()
     await dp.start_polling(bot)
 
