@@ -484,6 +484,10 @@ async def handle_unknown_command(message: Message) -> None:
 
 @dp.message(is_user_filter)
 async def handle_user_message(message: Message) -> None:
+    # Игнорируем нажатия на системные служебные кнопки
+    if message.text in [BTN_CHAT, BTN_STOP, BTN_LUCK, BTN_BURMALDA, BTN_START]:
+        return
+        
     if message.chat.id not in active_chat_users:
         return
     track_user(message)
