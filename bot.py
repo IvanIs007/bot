@@ -36,10 +36,11 @@ active_chat_users: set[int] = set()
 
 USERS_PER_PAGE = 10
 
-BTN_CHAT    = "🤫Приватный диалог"
-BTN_STOP    = "🛑 Завершить диалог"
-BTN_LUCK    = "🎲 Кинуть кость"
-BTN_START   = "👋 Старт"
+BTN_CHAT      = "🤫Приватный диалог"
+BTN_STOP      = "🛑 Завершить диалог"
+BTN_LUCK      = "🎲 Кинуть кость"
+BTN_BURMALDA  = "🎰 Бурмалда"
+BTN_START     = "👋 Старт"
 
 @dataclass
 class UserInfo:
@@ -74,7 +75,8 @@ def user_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_CHAT)],
-            [KeyboardButton(text=BTN_LUCK), KeyboardButton(text=BTN_START)],
+            [KeyboardButton(text=BTN_LUCK), KeyboardButton(text=BTN_BURMALDA)],
+            [KeyboardButton(text=BTN_START)],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выбери действие...",
@@ -444,6 +446,27 @@ async def cmd_luck(message: Message) -> None:
         logger.error(f"/luck error: {e}")
         await message.answer(f"Ошибка: {e}")
 
+@dp.message(is_user_filter, F.text == BTN_BURMALDA)
+async def btn_burmalda(message: Message) -> None:
+    await cmd_burmalda(message)
+
+@dp.message(Command("burmalda"))
+async def cmd_burmalda(message: Message) -> None:
+    try:
+        msg = await message.answer_dice(emoji="🎰")
+        await asyncio.sleep(3)
+        value = msg.dice.value
+        if value == 64:
+            text = "Джекпот! Ты сорвал куш, хотя я сомневаюсь, что это поможет тебе в жизни."
+        elif value > 40:
+            text = "Неплохо. Почти что-то достойное. Но до моего величия тебе далеко."
+        else:
+            text = "Пусто. Как и в твоих карманах. Типичный результат для такого игрока."
+        await message.answer(text)
+    except Exception as e:
+        logger.error(f"/burmalda error: {e}")
+        await message.answer(f"Ошибка: {e}")
+
 @dp.message(is_user_filter, F.text.startswith("/"))
 async def handle_unknown_command(message: Message) -> None:
     await message.answer(
@@ -451,7 +474,8 @@ async def handle_unknown_command(message: Message) -> None:
         "Вот тебе список того, что я умею. Не благодари.\n\n"
         "/start — начать диалог\n"
         f"/chat — {BTN_CHAT}\n"
-        "/luck — кинуть кость"
+        "/luck — кинуть кость\n"
+        "/burmalda — Бурмалда 🎰"
     )
 
 @dp.message(is_user_filter)
@@ -487,9 +511,10 @@ def run_health_check_server():
 
 async def setup_commands() -> None:
     user_commands = [
-        BotCommand(command="start",  description="👋 Начать диалог"),
-        BotCommand(command="chat",   description=f"{BTN_CHAT}"),
-        BotCommand(command="luck",   description="🎲 Кинуть кость"),
+        BotCommand(command="start",     description="👋 Начать диалог"),
+        BotCommand(command="chat",      description=f"{BTN_CHAT}"),
+        BotCommand(command="luck",      description="🎲 Кинуть кость"),
+        BotCommand(command="burmalda",  description="🎰 Бурмалда"),
     ]
     admin_commands = user_commands + [
         BotCommand(command="panel", description="⚙️ Панель управления"),
