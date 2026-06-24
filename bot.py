@@ -39,7 +39,7 @@ USERS_PER_PAGE = 10
 BTN_CHAT      = "🤫Приватный диалог"
 BTN_STOP      = "🛑 Завершить диалог"
 BTN_LUCK      = "🎲 Кинуть кость"
-BTN_BURMALDA  = "🎰 Бурмалда"
+BTN_BURMALDA  = "Бурмалда 🎰"
 BTN_START     = "👋 Старт"
 
 @dataclass
@@ -453,6 +453,10 @@ async def btn_burmalda(message: Message) -> None:
 @dp.message(Command("burmalda"))
 async def cmd_burmalda(message: Message) -> None:
     try:
+        await message.answer(
+            "Так-так, казино... И всё благодаря Макдональд. Она, видимо, решила, что мне не хватает развлечений. "
+            "Что ж, раз уж ты тут — давай проверим, есть ли у тебя что-то кроме наглости."
+        )
         msg = await message.answer_dice(emoji="🎰")
         await asyncio.sleep(3)
         value = msg.dice.value
