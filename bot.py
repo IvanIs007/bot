@@ -33,6 +33,7 @@ greeting_text: str = "Ух ты, новенький! Обычно люди уб�
 forward_map: dict[int, int] = {}
 admin_chat_id: int | None = ADMIN_ID if ADMIN_ID != 0 else None
 active_chat_users: set[int] = set()
+burmalda_sevens_triggered: bool = False  # Флаг для отслеживания выпадения трех семёрок
 
 USERS_PER_PAGE = 10
 
@@ -452,16 +453,27 @@ async def btn_burmalda(message: Message) -> None:
 
 @dp.message(Command("burmalda"))
 async def cmd_burmalda(message: Message) -> None:
+    global burmalda_sevens_triggered
     try:
-        await message.answer(
-            "О, ты запомнил это место? Похвально. Я думал, твоя память ограничивается списком твоих ошибок. "
-            "Но, увы, акция закончилась. Казино закрылось. Но раз уж ты заглянул — я могу позволить тебе бросить кости в последний раз."
-        )
+        # Проверяем флаг для изменения вступления
+        if burmalda_sevens_triggered:
+            await message.answer(
+                "Я закрыл казино. Но ты такой настойчивый… Это почти умиляет. Так и быть — последний раз. Только запомни: я смотрю на тебя и не одобряю твоей одержимости."
+            )
+            burmalda_sevens_triggered = False  # Сбрасываем флаг после использования
+        else:
+            await message.answer(
+                "О, ты запомнил это место? Похвально. Я думал, твоя память ограничивается списком твоих ошибок. "
+                "Но, увы, акция закончилась. Казино закрылось. Но раз уж ты заглянул — я могу позволить тебе бросить кости в последний раз."
+            )
+        
         msg = await message.answer_dice(emoji="🎰")
         await asyncio.sleep(3)
         value = msg.dice.value
         if value == 64:
             text = "Число удачи. Или просто совпадение. Я не знаю, что это — но ты выиграл. Я признаю это. Наслаждайся моментом, он не повторится. И не проси реванша — я не буду играть с тобой снова."
+            # Устанавливаем флаг, что выпали три семёрки
+            burmalda_sevens_triggered = True
         elif value in (1, 22, 43):
             text = "Фруктовая комбинация. Что ж, это лучше, чем ничего. Но далеко не главный приз. Наслаждайся своим... \"успехом\", но не думай, что это приближает тебя к джекпоту."
         else:
