@@ -454,19 +454,29 @@ async def btn_burmalda(message: Message) -> None:
 async def cmd_burmalda(message: Message) -> None:
     try:
         await message.answer(
-            "Так-так, казино... И всё благодаря Макдональд. Она, видимо, решила, что мне не хватает развлечений. "
-            "Что ж, раз уж ты тут — давай проверим, есть ли у тебя что-то кроме наглости."
+            "О, ты запомнил это место? Похвально. Я думал, твоя память ограничивается списком твоих ошибок. "
+            "Но, увы, акция закончилась. Казино закрылось. Но раз уж ты заглянул — я могу позволить тебе бросить кости в последний раз."
         )
-        msg = await message.answer_dice(emoji="🎰")
-        await asyncio.sleep(3)
-        value = msg.dice.value
-        if value == 64:
-            text = "Джекпот! Ты сорвал куш, хотя я сомневаюсь, что это поможет тебе в жизни."
-        elif value > 40:
-            text = "Неплохо. Почти что-то достойное. Но до моего величия тебе далеко."
+        user_dice = await bot.send_dice(chat_id=message.chat.id, emoji="🎲")
+        bot_dice = await bot.send_dice(chat_id=message.chat.id, emoji="🎲")
+        await asyncio.sleep(4)
+        u = user_dice.dice.value
+        b = bot_dice.dice.value
+        if u > b:
+            result = (
+                "Неожиданно, но не обольщайся. Это была лишь случайность. Или моя снисходительность."
+            )
+        elif u < b:
+            result = (
+                "И что я говорил? Ты проиграл. Как и ожидалось. "
+                "Не расстраивайся. Ты не первый. Ты не последний. "
+                "Ты просто очередной, кто попытался бросить вызов Малфою и пожалел об этом."
+            )
         else:
-            text = "Пусто. Как и в твоих карманах. Типичный результат для такого игрока."
-        await message.answer(text)
+            result = (
+                "Ничья? Забавно. В следующий раз я не буду таким великодушным. Если, конечно, будет следующий раз."
+            )
+        await message.answer(f"Ты: {u} — Я: {b}\n{result}")
     except Exception as e:
         logger.error(f"/burmalda error: {e}")
         await message.answer(f"Ошибка: {e}")
@@ -513,9 +523,7 @@ def run_health_check_server():
     logger.info(f"Встроенный веб-сервер запущен на порту {PORT}")
     httpd.serve_forever()
 
-# ──────────────────────────────────────────────
-# Запуск
-# ──────────────────────────────────────────────
+# ─────────────────
 
 async def setup_commands() -> None:
     user_commands = [
